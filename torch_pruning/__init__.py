@@ -5,7 +5,7 @@ including dependency graph analysis and various pruning algorithms.
 """
 
 # Core imports
-from . import _helpers, integrations, utils
+from . import _helpers, utils
 from .dependency import *
 from .pruner import *
 from .pruner import importance
