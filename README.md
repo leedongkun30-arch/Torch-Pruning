@@ -17,6 +17,14 @@
 - Mixtral-like patch helper
 - Expert_Sparsity-style CLI entry point
 
+## Installation
+
+```bash
+pip install -e .
+```
+
+This merged repository requires `transformers` in addition to PyTorch and NumPy because the HF runtime, auto-router, and Expert_Sparsity CLI load Hugging Face configs, tokenizers, processors, and models.
+
 ## Repository layout
 
 ```text

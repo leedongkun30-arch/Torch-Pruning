@@ -10,7 +10,7 @@ import json
 
 import torch
 
-from torch_pruning.hf import prune_dense_hf_model
+from torch_pruning.hf import load_pretrained_hf_model, prune_dense_hf_model
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,15 +23,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    from transformers import AutoImageProcessor, AutoModel
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = AutoModel.from_pretrained(args.model, trust_remote_code=args.trust_remote_code).eval().to(device)
-    processor = AutoImageProcessor.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
-    pixel_values = processor(images=torch.rand(3, 224, 224), return_tensors="pt")["pixel_values"].to(device)
+    loaded = load_pretrained_hf_model(args.model, trust_remote_code=args.trust_remote_code)
     summary = prune_dense_hf_model(
-        model,
-        {"pixel_values": pixel_values},
+        loaded.model,
+        loaded.example_inputs,
         pruning_ratio=args.pruning_ratio,
     )
     print(json.dumps(summary, indent=2))

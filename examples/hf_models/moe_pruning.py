@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from torch_pruning.hf import ExpertSparsityConfig, prune_moe_hf_model
+from torch_pruning.hf import ExpertSparsityConfig, load_pretrained_hf_model, prune_moe_hf_model
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,14 +28,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    from transformers import AutoModelForCausalLM
-
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        trust_remote_code=args.trust_remote_code,
-    ).eval()
+    loaded = load_pretrained_hf_model(args.model, trust_remote_code=args.trust_remote_code)
     summary = prune_moe_hf_model(
-        model,
+        loaded.model,
         config=ExpertSparsityConfig(
             method=args.method,
             preserve_experts=args.r,

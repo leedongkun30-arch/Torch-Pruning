@@ -11,10 +11,16 @@ from expert_sparsity.data import build_calib_loader
 from expert_sparsity.method import METHODS
 from expert_sparsity.model import patch_mixtral_for_dynamic_skipping
 from torch_pruning.hf import (
+    HFModelKind,
     HFUnifiedPruningConfig,
     apply_dynamic_skipping,
+    build_hf_example_inputs,
     default_dense_ignored_layers,
     find_moe_blocks,
+    hf_forward,
+    hf_output_transform,
+    infer_hf_input_mode,
+    infer_hf_model_kind,
     is_moe_model,
     prune_dense_hf_model,
     prune_hf_model,
@@ -44,7 +50,7 @@ class TinyDenseHFModel(nn.Module):
             nn.AdaptiveAvgPool2d((1, 1)),
         )
         self.classifier = nn.Linear(16, 4)
-        self.config = SimpleNamespace(model_type="vit")
+        self.config = SimpleNamespace(model_type="vit", image_size=16, num_channels=3)
 
     def forward(self, pixel_values: torch.Tensor) -> SimpleNamespace:
         x = self.backbone(pixel_values)
@@ -80,11 +86,31 @@ class TinyMoEBlock(nn.Module):
 class TinyMoEHFModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
+        self.embed = nn.Embedding(32, 8)
         self.block_sparse_moe = TinyMoEBlock()
-        self.config = SimpleNamespace(model_type="mixtral")
+        self.lm_head = nn.Linear(8, 32)
+        self.config = SimpleNamespace(model_type="mixtral", vocab_size=32)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.block_sparse_moe(x)
+    def forward(self, input_ids: torch.Tensor, attention_mask=None) -> SimpleNamespace:
+        x = self.embed(input_ids).mean(dim=1)
+        hidden = self.block_sparse_moe(x)
+        return SimpleNamespace(logits=self.lm_head(hidden))
+
+
+def test_runtime_builds_inputs_and_forwards() -> None:
+    dense_model = TinyDenseHFModel().eval()
+    dense_inputs = build_hf_example_inputs(dense_model, image_size=16)
+    assert infer_hf_input_mode(dense_model) == "vision"
+    dense_output = hf_forward(dense_model, dense_inputs)
+    assert hf_output_transform(dense_output).ndim == 0
+    assert infer_hf_model_kind(dense_model) == HFModelKind.DENSE
+
+    moe_model = TinyMoEHFModel().eval()
+    moe_inputs = build_hf_example_inputs(moe_model, seq_len=8)
+    assert infer_hf_input_mode(moe_model) == "text"
+    moe_output = hf_forward(moe_model, moe_inputs)
+    assert hf_output_transform(moe_output).ndim == 0
+    assert infer_hf_model_kind(moe_model) == HFModelKind.MOE
 
 
 def test_default_dense_ignored_layers_finds_classifier() -> None:
@@ -97,12 +123,7 @@ def test_prune_dense_hf_model_keeps_output_shape() -> None:
     model = TinyDenseHFModel().eval()
     example_inputs = {"pixel_values": torch.randn(1, 3, 16, 16)}
     before = model(**example_inputs).logits
-    summary = prune_dense_hf_model(
-        model,
-        example_inputs,
-        pruning_ratio=0.25,
-        output_transform=lambda out: out.logits.sum(),
-    )
+    summary = prune_dense_hf_model(model, example_inputs, pruning_ratio=0.25)
     after = model(**example_inputs).logits
     assert before.shape == after.shape == (1, 4)
     assert summary["path"] == "dense"
@@ -147,7 +168,6 @@ def test_unified_router_dispatches_dense_and_moe() -> None:
     dense_model = TinyDenseHFModel().eval()
     dense_summary = prune_hf_model(
         dense_model,
-        {"pixel_values": torch.randn(1, 3, 16, 16)},
         config=HFUnifiedPruningConfig(pruning_ratio=0.25),
     )
     assert dense_summary["path"] == "dense"

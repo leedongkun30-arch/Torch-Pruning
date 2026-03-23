@@ -10,7 +10,7 @@ import json
 
 import torch
 
-from torch_pruning.hf import HFUnifiedPruningConfig, is_moe_model, prune_hf_model
+from torch_pruning.hf import HFUnifiedPruningConfig, load_pretrained_hf_model, prune_hf_model
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,8 +27,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    from transformers import AutoImageProcessor, AutoModel, AutoModelForCausalLM
-
     config = HFUnifiedPruningConfig(
         pruning_ratio=args.pruning_ratio,
         moe_method=args.moe_method,
@@ -37,14 +35,8 @@ def main() -> None:
         beta=args.beta,
     )
 
-    dense_model = AutoModel.from_pretrained(args.model, trust_remote_code=args.trust_remote_code).eval()
-    if is_moe_model(dense_model):
-        model = AutoModelForCausalLM.from_pretrained(args.model, trust_remote_code=args.trust_remote_code).eval()
-        summary = prune_hf_model(model, config=config)
-    else:
-        processor = AutoImageProcessor.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
-        pixel_values = processor(images=torch.rand(3, 224, 224), return_tensors="pt")["pixel_values"]
-        summary = prune_hf_model(dense_model, {"pixel_values": pixel_values}, config=config)
+    loaded = load_pretrained_hf_model(args.model, trust_remote_code=args.trust_remote_code)
+    summary = prune_hf_model(loaded.model, loaded.example_inputs, config=config)
     print(json.dumps(summary, indent=2))
 
 

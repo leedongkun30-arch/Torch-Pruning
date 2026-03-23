@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from .dense import prune_dense_hf_model
 from .moe import ExpertSparsityConfig, find_moe_blocks, prune_moe_hf_model
+from .runtime import HFModelKind, build_hf_example_inputs, infer_hf_model_kind
 
 
 @dataclass
@@ -24,11 +25,7 @@ class HFUnifiedPruningConfig:
 
 
 def is_moe_model(model: nn.Module) -> bool:
-    if find_moe_blocks(model):
-        return True
-    config = getattr(model, "config", None)
-    model_type = getattr(config, "model_type", "")
-    return model_type in {"mixtral", "qwen2_moe", "deepseek_v2", "deepseek_v3"}
+    return infer_hf_model_kind(model) == HFModelKind.MOE
 
 
 def prune_hf_model(model: nn.Module, example_inputs: Any = None, *, config: Optional[HFUnifiedPruningConfig] = None):
@@ -51,5 +48,5 @@ def prune_hf_model(model: nn.Module, example_inputs: Any = None, *, config: Opti
         return prune_moe_hf_model(model, config=moe_config)
 
     if example_inputs is None:
-        raise ValueError("Dense/CNN pruning requires example_inputs.")
+        example_inputs = build_hf_example_inputs(model)
     return prune_dense_hf_model(model, example_inputs, pruning_ratio=resolved.pruning_ratio)

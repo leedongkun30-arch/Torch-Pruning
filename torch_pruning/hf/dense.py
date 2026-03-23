@@ -11,13 +11,7 @@ import torch.nn as nn
 
 import torch_pruning as tp
 
-
-def _default_output_transform(out: Any):
-    if hasattr(out, "logits"):
-        return out.logits.sum()
-    if hasattr(out, "last_hidden_state"):
-        return out.last_hidden_state.sum()
-    return out
+from .runtime import hf_output_transform
 
 
 def default_dense_ignored_layers(model: nn.Module) -> List[nn.Module]:
@@ -62,7 +56,7 @@ def prune_dense_hf_model(
     ignored = list(dict.fromkeys(ignored))
 
     imp = importance or tp.importance.GroupMagnitudeImportance(p=2)
-    output_transform = output_transform or _default_output_transform
+    output_transform = output_transform or hf_output_transform
     base_macs, base_params = tp.utils.count_ops_and_params(model, example_inputs)
 
     pruner = tp.pruner.BasePruner(
