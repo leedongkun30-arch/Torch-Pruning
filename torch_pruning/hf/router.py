@@ -31,21 +31,16 @@ def is_moe_model(model: nn.Module) -> bool:
 def prune_hf_model(model: nn.Module, example_inputs: Any = None, *, config: Optional[HFUnifiedPruningConfig] = None):
     resolved = config or HFUnifiedPruningConfig()
     if is_moe_model(model):
-        if resolved.moe_method == "dynamic_skipping":
-            moe_config = ExpertSparsityConfig(
-                method=resolved.moe_method,
-                preserve_experts=resolved.preserve_experts,
-                score_metric=resolved.score_metric,
-                dynamic_skipping=True,
-                beta=resolved.beta,
-            )
-            return prune_moe_hf_model(model, config=moe_config)
-        moe_config = ExpertSparsityConfig(
-            method=resolved.moe_method,
-            preserve_experts=resolved.preserve_experts,
-            score_metric=resolved.score_metric,
-        )
-        return prune_moe_hf_model(model, config=moe_config)
+        from expert_sparsity.method import METHODS
+
+        args = type("Args", (), {
+            "method": resolved.moe_method,
+            "r": resolved.preserve_experts,
+            "score_metric": resolved.score_metric,
+            "beta": resolved.beta,
+        })()
+        _model, info = METHODS[resolved.moe_method](model, [], args)
+        return info
 
     if example_inputs is None:
         example_inputs = build_hf_example_inputs(model)
