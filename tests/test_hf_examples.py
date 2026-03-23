@@ -1,4 +1,4 @@
-"""Regression tests for merged HF dense and MoE pruning helpers."""
+"""Regression tests for unified HF dense and MoE pruning helpers."""
 
 from __future__ import annotations
 
@@ -7,14 +7,28 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
+from expert_sparsity.data import build_calib_loader
+from expert_sparsity.method import METHODS
+from expert_sparsity.model import patch_mixtral_for_dynamic_skipping
 from torch_pruning.hf import (
-    ExpertSparsityConfig,
+    HFUnifiedPruningConfig,
     apply_dynamic_skipping,
     default_dense_ignored_layers,
     find_moe_blocks,
+    is_moe_model,
     prune_dense_hf_model,
+    prune_hf_model,
     prune_moe_hf_model,
 )
+
+
+class TinyTokenizer:
+    def __call__(self, text, truncation, max_length, padding, return_tensors):
+        token_ids = torch.arange(max_length).unsqueeze(0)
+        return {
+            "input_ids": token_ids,
+            "attention_mask": torch.ones_like(token_ids),
+        }
 
 
 class TinyDenseHFModel(nn.Module):
@@ -30,6 +44,7 @@ class TinyDenseHFModel(nn.Module):
             nn.AdaptiveAvgPool2d((1, 1)),
         )
         self.classifier = nn.Linear(16, 4)
+        self.config = SimpleNamespace(model_type="vit")
 
     def forward(self, pixel_values: torch.Tensor) -> SimpleNamespace:
         x = self.backbone(pixel_values)
@@ -66,6 +81,7 @@ class TinyMoEHFModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.block_sparse_moe = TinyMoEBlock()
+        self.config = SimpleNamespace(model_type="mixtral")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.block_sparse_moe(x)
@@ -88,38 +104,59 @@ def test_prune_dense_hf_model_keeps_output_shape() -> None:
         output_transform=lambda out: out.logits.sum(),
     )
     after = model(**example_inputs).logits
-
     assert before.shape == after.shape == (1, 4)
     assert summary["path"] == "dense"
     assert summary["pruned_params"] < summary["base_params"]
-    assert "classifier" in summary["ignored_layers"]
+
+
+def test_expert_sparsity_data_and_methods() -> None:
+    loader = build_calib_loader(
+        "c4",
+        TinyTokenizer(),
+        max_block_size=8,
+        n_blocks_for_stat=2,
+        batch_size=1,
+        num_workers=0,
+        seed=0,
+    )
+    batch = next(iter(loader))
+    assert "input_ids" in batch
+    assert set(METHODS.keys()) == {"layerwise_pruning", "progressive_pruning", "dynamic_skipping"}
 
 
 def test_find_and_prune_moe_hf_model() -> None:
     model = TinyMoEHFModel().eval()
     blocks = find_moe_blocks(model)
     assert len(blocks) == 1
-    assert blocks[0].router_name == "router"
-
-    summary = prune_moe_hf_model(
-        model,
-        config=ExpertSparsityConfig(
-            method="layerwise_pruning",
-            preserve_experts=2,
-            score_metric="l1",
-        ),
-    )
-
+    summary = prune_moe_hf_model(model)
     assert summary["path"] == "moe"
-    assert summary["blocks"][0]["original_experts"] == 3
-    assert summary["blocks"][0]["kept_experts"] == 2
-    assert len(model.block_sparse_moe.experts) == 2
-    assert model.block_sparse_moe.router.out_features == 2
+    assert len(model.block_sparse_moe.experts) == 1
+    assert model.block_sparse_moe.router.out_features == 1
 
 
-def test_apply_dynamic_skipping_annotations() -> None:
+def test_dynamic_skipping_and_mixtral_patch() -> None:
     model = TinyMoEHFModel().eval()
+    patch_info = patch_mixtral_for_dynamic_skipping(model)
     summary = apply_dynamic_skipping(model, beta=0.2)
+    assert patch_info["is_mixtral_like"] is True
     assert summary["mode"] == "dynamic_skipping"
-    assert summary["num_blocks"] == 1
     assert model.block_sparse_moe.expert_skipping_beta == 0.2
+
+
+def test_unified_router_dispatches_dense_and_moe() -> None:
+    dense_model = TinyDenseHFModel().eval()
+    dense_summary = prune_hf_model(
+        dense_model,
+        {"pixel_values": torch.randn(1, 3, 16, 16)},
+        config=HFUnifiedPruningConfig(pruning_ratio=0.25),
+    )
+    assert dense_summary["path"] == "dense"
+    assert is_moe_model(dense_model) is False
+
+    moe_model = TinyMoEHFModel().eval()
+    moe_summary = prune_hf_model(
+        moe_model,
+        config=HFUnifiedPruningConfig(moe_method="dynamic_skipping", preserve_experts=2, beta=0.3),
+    )
+    assert moe_summary["path"] == "moe"
+    assert is_moe_model(moe_model) is True

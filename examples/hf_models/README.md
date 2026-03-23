@@ -1,13 +1,12 @@
 # Hugging Face Dense + MoE Pruning Workflows
 
-이 디렉터리는 **합쳐진 레포** 안에서 Hugging Face pruning 경로를 두 가지로 제공합니다.
+이 디렉터리는 이제 세 가지 entry point를 제공합니다.
 
-- `dense_pruning.py`: Torch-Pruning 기반 CNN / dense 모델 pruning
-- `moe_pruning.py`: Expert_Sparsity 스타일 MoE 모델 pruning
+- `dense_pruning.py`: Torch-Pruning 기반 dense/CNN 전용 실행기
+- `moe_pruning.py`: Expert_Sparsity 기반 MoE 전용 실행기
+- `prune_hf_model.py`: HF 모델 속성을 보고 dense vs MoE 경로를 자동 선택하는 통합 실행기
 
-구현 위치는 패키지 기준으로 아래와 같습니다.
+패키지 구조는 다음 두 축으로 나뉩니다.
 
-- `torch_pruning/hf/dense.py`
-- `torch_pruning/hf/moe.py`
-
-즉, 이번 구조는 dense와 moe를 분리해서 설명하되, **두 경로를 하나의 공개 레포 안에 함께 포함하는 형태**입니다.
+- `torch_pruning/hf/`: dense helper + 통합 router
+- `expert_sparsity/`: 원본 Expert_Sparsity 구조를 반영한 data / method / model / main 패키지
