@@ -44,6 +44,7 @@ Or Join our WeChat group for more discussions: ✉️ [Group-2](https://github.c
 
 ## Table of Contents
 - [Installation](#installation)
+- [Repository Scope for Public Release](#repository-scope-for-public-release)
 - [Quickstart](#quickstart)
    - [Why Torch-Pruning?](#why-torch-pruning)
    - [How It Works: DepGraph](#how-it-works-depgraph)
@@ -76,6 +77,20 @@ For editable installation:
 git clone https://github.com/VainF/Torch-Pruning.git
 cd Torch-Pruning && pip install -e .
 ```
+
+## Repository Scope for Public Release
+
+This repository can be organized as a public-facing merge point between two internal code paths:
+
+- **Torch-Pruning path** for CNN and dense Hugging Face models.
+- **Expert_Sparsity path** for MoE Hugging Face models.
+
+The new integration scaffold lives in `torch_pruning/integrations/hf/` and exposes a single routing API: `torch_pruning.integrations.hf.prune_hf_model(...)`. The behavior is intentionally split as follows:
+
+1. **CNN / dense models** are pruned directly with Torch-Pruning high-level pruners.
+2. **MoE models** are detected and routed to an adapter boundary so your local `Expert_Sparsity` modifications can be inserted without changing the public project layout.
+
+A minimal example entry point is available at `examples/hf_models/prune_hf_model.py`, and a lightweight regression test for the router is available at `tests/test_hf_integration.py`.
 
 ## Quickstart
   
