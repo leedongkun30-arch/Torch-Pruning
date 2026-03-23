@@ -1,15 +1,20 @@
-"""Regression tests for the separated HF pruning example entry points."""
+"""Regression tests for merged HF dense and MoE pruning helpers."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 import torch
 import torch.nn as nn
 
-from examples.hf_models.dense_pruning import default_dense_ignored_layers, prune_dense_hf_model
-from examples.hf_models.moe_pruning import build_moe_workflow_plan, run_moe_pruning_workflow
+from torch_pruning.hf import (
+    ExpertSparsityConfig,
+    apply_dynamic_skipping,
+    default_dense_ignored_layers,
+    find_moe_blocks,
+    prune_dense_hf_model,
+    prune_moe_hf_model,
+)
 
 
 class TinyDenseHFModel(nn.Module):
@@ -42,14 +47,28 @@ class TinyExpert(nn.Module):
         return self.fc2(torch.relu(self.fc1(x)))
 
 
+class TinyMoEBlock(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.router = nn.Linear(8, 3, bias=False)
+        self.experts = nn.ModuleList([TinyExpert(), TinyExpert(), TinyExpert()])
+        self.num_experts = 3
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        weights = torch.softmax(self.router(x), dim=-1)
+        outputs = []
+        for idx, expert in enumerate(self.experts):
+            outputs.append(weights[:, idx : idx + 1] * expert(x))
+        return sum(outputs)
+
+
 class TinyMoEHFModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.router = nn.Linear(8, 2)
-        self.experts = nn.ModuleList([TinyExpert(), TinyExpert()])
+        self.block_sparse_moe = TinyMoEBlock()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x
+        return self.block_sparse_moe(x)
 
 
 def test_default_dense_ignored_layers_finds_classifier() -> None:
@@ -76,18 +95,31 @@ def test_prune_dense_hf_model_keeps_output_shape() -> None:
     assert "classifier" in summary["ignored_layers"]
 
 
-def test_moe_workflow_plan_and_placeholder() -> None:
-    model = TinyMoEHFModel()
-    plan = build_moe_workflow_plan(
+def test_find_and_prune_moe_hf_model() -> None:
+    model = TinyMoEHFModel().eval()
+    blocks = find_moe_blocks(model)
+    assert len(blocks) == 1
+    assert blocks[0].router_name == "router"
+
+    summary = prune_moe_hf_model(
         model,
-        model_name="toy-moe",
-        output_dir="outputs/toy",
-        note="separate workflow",
+        config=ExpertSparsityConfig(
+            method="layerwise_pruning",
+            preserve_experts=2,
+            score_metric="l1",
+        ),
     )
 
-    assert plan["path"] == "moe"
-    assert plan["router_like_modules"] == ["router"]
-    assert any(name.startswith("experts") for name in plan["expert_like_modules"])
+    assert summary["path"] == "moe"
+    assert summary["blocks"][0]["original_experts"] == 3
+    assert summary["blocks"][0]["kept_experts"] == 2
+    assert len(model.block_sparse_moe.experts) == 2
+    assert model.block_sparse_moe.router.out_features == 2
 
-    with pytest.raises(NotImplementedError):
-        run_moe_pruning_workflow()
+
+def test_apply_dynamic_skipping_annotations() -> None:
+    model = TinyMoEHFModel().eval()
+    summary = apply_dynamic_skipping(model, beta=0.2)
+    assert summary["mode"] == "dynamic_skipping"
+    assert summary["num_blocks"] == 1
+    assert model.block_sparse_moe.expert_skipping_beta == 0.2
